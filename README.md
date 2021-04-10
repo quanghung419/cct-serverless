@@ -1,0 +1,1 @@
+Simple serverless application, which periodically fetches trade from Binance, Huobi, FTX and inserts transactions into Cointracking.com

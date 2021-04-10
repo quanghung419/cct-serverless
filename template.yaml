@@ -1,0 +1,1155 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  crypto-tracking-serverless
+
+Globals:
+  Function:
+    Runtime: nodejs12.x
+    Timeout: 900
+
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: cct-serverless
+    Description: Simple serverless application, which periodically fetches trade from Binance and other exchange and inserts transactions into Cointracking.com
+    Author: Hung Do
+    SpdxLicenseId: MIT
+    LicenseUrl: LICENSE.txt
+    ReadmeUrl: README.md
+    HomePageUrl: https://github.com/quanghung419/cct-serverless
+    SemanticVersion: 1.0.3
+    SourceCodeUrl: https://github.com/quanghung419/cct-serverless
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Binance exchange configuration"
+        Parameters:
+          - BinanceExchangeApiKey
+          - BinanceExchangeSecretKey
+          - BinanceExchangeDisplayName
+          - BinanceFetchTradeFrequency
+          - EnabledFetchBinanceDeposit
+          - EnabledFetchBinanceWithdraw
+          - EnabledFetchBinanceDistribution
+      - Label:
+          default: "Huobi exchange configuration"
+        Parameters:
+          - HuobiExchangeApiKey
+          - HuobiExchangeSecretKey
+          - HuobiExchangeDisplayName
+          - HuobiFetchTradeFrequency
+          - HuobiFetchRange
+      - Label:
+          default: "FTX exchange configuration"
+        Parameters:
+          - FtxExchangeDisplayName
+          - FtxExchangeApiKey
+          - FtxExchangeSecretKey
+          - FtxFetchTradeFrequency
+      # - Label:
+      #     default: "Network scan API (for mapping address and create transfer transaction)"
+      #   Parameters:
+      #     - BscscanApiKey
+      #     - EtherscanApiKey
+      - Label:
+          default: "Cointracking setting"
+        Parameters:
+          - CointrackingCookie
+          - CointrackingInputUrl
+          - StartDate
+    ParameterLabels:
+      CointrackingCookie:
+        default: "Cointracking cookie"
+
+Parameters:
+  Email:
+    Type: String
+    Description: Your email address to receive alarms via email
+  StartDate:
+    Type: String
+    Description: "Use this field to skip all trades before the specified date. Example: 2020/02/22 00:00:00"
+    AllowedPattern: \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}
+    Default: "2021/01/01 00:00:00"
+  CointrackingCookie:
+    Type: String
+    Description: "Cointracking Cookie"
+  CointrackingInputUrl:
+    Type: String
+    Description: "Cointracking Input Url"
+  # BscscanApiKey:
+  #   Type: String
+  #   Description: "Bscscan Api Key"
+  #   Default: ""
+  # EtherscanApiKey:
+  #   Type: String
+  #   Description: "Bscscan Api Key"
+  #   Default: ""
+  FtxExchangeDisplayName:
+    Type: String
+    Description: "Ftx exchange name, which name you want to show in CoinTracking.com (eg: FTX, FTX exchange, FTX.com ...)"
+    Default: "FTX"
+  FtxExchangeApiKey:
+    Type: String
+    Description: "Ftx Exchange Api Key"
+    Default: ""
+  FtxExchangeSecretKey:
+    Type: String
+    Description: "Ftx Exchange Secret Key"
+    Default: ""
+  FtxFetchTradeFrequency:
+    Type: Number
+    Description: "How often do you want to fetch new trade from FTX in hour(s)? - default value is 1 (hour)"
+    Default: 1
+    MinValue: 1
+    MaxValue: 24
+  HuobiFetchRange:
+    Type: Number
+    Description: "Range to fetch Huobi trade. Eg: 1 <=> fetch all trade within 1 day recently"
+    Default: 2
+    MinValue: 1
+    MaxValue: 2
+  HuobiExchangeApiKey:
+    Type: String
+    Description: "Huobi Exchange Api Key"
+    Default: ""
+  HuobiExchangeSecretKey:
+    Type: String
+    Description: "Huobi Exchange Secret Key"
+    Default: ""
+  HuobiExchangeDisplayName:
+    Type: String
+    Description: "Huobi exchange name, which name you want to show in CoinTracking.com (eg: Huobi, Huobi Pro, Huobi exchange, huobi.com ...)"
+    Default: "Huobi"
+  HuobiFetchTradeFrequency:
+    Type: Number
+    Description: "How often do you want to fetch new trade from Huobi in hour(s)? - default value is 1 (hour)"
+    Default: 1
+    MinValue: 1
+    MaxValue: 24
+  BinanceExchangeApiKey:
+    Type: String
+    Description: "Binance Exchange Api Key"
+  BinanceExchangeSecretKey:
+    Type: String
+    Description: "Binance Exchange Secret Key"
+  BinanceExchangeDisplayName:
+    Type: String
+    Description: "Binance exchange name, which name you want to show in CoinTracking.com (eg: Binance, Binance exchange, binance.com ...)"
+    Default: "Binance"
+  BinanceFetchTradeFrequency:
+    Type: Number
+    Description: "How often do you want to fetch new trade from Binance in hour(s)? - default value is 1 (hour)"
+    Default: 1
+    MinValue: 1
+    MaxValue: 24
+  EnabledFetchBinanceDistribution:
+    Type: String
+    Description: "Is enable feature auto fetch Binance Distribution "
+    Default: "DISABLED"
+    AllowedValues:
+      - "DISABLED"
+      - "ENABLED"
+  EnabledFetchBinanceDeposit:
+    Type: String
+    Description: "Is enable feature auto fetch Binance Deposit"
+    Default: "DISABLED"
+    AllowedValues:
+      - "DISABLED"
+      - "ENABLED"
+  EnabledFetchBinanceWithdraw:
+    Type: String
+    Description: "Is enable feature auto fetch Binance Withdraw"
+    Default: "DISABLED"
+    AllowedValues:
+      - "DISABLED"
+      - "ENABLED"
+
+Conditions:
+  IsHuobiExchangeEnabled: !And [!Not [!Equals [!Ref HuobiExchangeApiKey, '']], !Not [!Equals [!Ref HuobiExchangeSecretKey, '']]]
+  IsFtxExchangeEnabled: !And [!Not [!Equals [!Ref FtxExchangeApiKey, '']], !Not [!Equals [!Ref FtxExchangeSecretKey, '']]]
+  # HasBscscanApiKey: !Not [!Equals [!Ref BscscanApiKey, '']]
+  # HasEtherscanApiKey: !Not [!Equals [!Ref EtherscanApiKey, '']]
+  IsEnabledFetchBinanceDistribution: !Equals [!Ref EnabledFetchBinanceDistribution, 'ENABLED']
+  IsEnabledFetchBinanceDeposit: !Equals [!Ref EnabledFetchBinanceDeposit, 'ENABLED']
+  IsEnabledFetchBinanceWithdraw: !Equals [!Ref EnabledFetchBinanceWithdraw, 'ENABLED']
+
+Resources:
+
+  CryptoTrackingAwsApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          Description: Personal plan usage
+          Quota:
+            Limit: 10000
+            Period: MONTH
+          Throttle:
+            BurstLimit: 20
+            RateLimit: 10
+
+  libs:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: exchange-lib
+      Description: Dependencies for the exchange API
+      ContentUri: exchange-lib/.
+      CompatibleRuntimes:
+        - nodejs12.x
+
+  BinanceFetchTransaction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Binance trade
+      CodeUri: functions/binance-fetch-trade/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          BINANCE_EXCHANGE_API_KEY: !Ref BinanceExchangeApiKey
+          BINANCE_EXCHANGE_SECRET_KEY: !Ref BinanceExchangeSecretKey
+          EXCHANGE_NAME: !Ref BinanceExchangeDisplayName
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          START_DATE: !Ref StartDate
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - AWSLambdaBasicExecutionRole
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SqsBinanceRequestFetchTrade.QueueName
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/BinanceFetchTransaction'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  InitFetchTradeRequest:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Init request fetch Huobi trade
+      CodeUri: functions/init-fetch-trade-request/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          SQS_BINANCE_REQUEST_QUEUE_URL: !Ref SqsBinanceRequestFetchTrade
+          SQS_HUOBI_REQUEST_QUEUE_URL: !If [IsHuobiExchangeEnabled, !Ref SqsHuobiRequestFetchTrade, !Ref AWS::NoValue]
+          SQS_FTX_REQUEST_QUEUE_URL: !If [IsFtxExchangeEnabled, !Ref SqsFtxRequestFetchTrade, !Ref AWS::NoValue]
+          PORTFOLIO_TABLE_NAME: !Ref PortfolioTable
+      Policies:
+        - !If
+          - IsFtxExchangeEnabled
+          - SQSSendMessagePolicy:
+              QueueName: !GetAtt SqsFtxRequestFetchTrade.QueueName
+          - Ref: AWS::NoValue
+        - !If
+          - IsHuobiExchangeEnabled
+          - SQSSendMessagePolicy:
+              QueueName: !GetAtt SqsHuobiRequestFetchTrade.QueueName
+          - Ref: AWS::NoValue
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref PortfolioTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsBinanceRequestFetchTrade.QueueName
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/InitFetchTradeRequest'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  HuobiFetchTransaction:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Huobi trade
+      CodeUri: functions/huobipro-fetch-trade/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          HUOBIPRO_EXCHANGE_API_KEY: !If [IsHuobiExchangeEnabled, !Ref HuobiExchangeApiKey, !Ref AWS::NoValue]
+          HUOBIPRO_EXCHANGE_SECRET_KEY: !If [IsHuobiExchangeEnabled, !Ref HuobiExchangeSecretKey, !Ref AWS::NoValue]
+          EXCHANGE_NAME: !Ref HuobiExchangeDisplayName
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          PORTFOLIO_TABLE_NAME: !Ref PortfolioTable
+          START_DATE: !Ref StartDate
+          HUOBI_PAST_WINDOW: !Ref HuobiFetchRange
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !If [IsHuobiExchangeEnabled, !GetAtt SqsHuobiRequestFetchTrade.QueueName, !Ref AWS::NoValue]
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref PortfolioTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/HuobiFetchTransaction'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  FtxFetchTransaction:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch FTX trade
+      CodeUri: functions/ftx-fetch-trade/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          FTX_EXCHANGE_API_KEY: !If [IsFtxExchangeEnabled, !Ref FtxExchangeApiKey, !Ref AWS::NoValue]
+          FTX_EXCHANGE_SECRET_KEY: !If [IsFtxExchangeEnabled, !Ref FtxExchangeSecretKey, !Ref AWS::NoValue]
+          EXCHANGE_NAME: !Ref FtxExchangeDisplayName
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          PORTFOLIO_TABLE_NAME: !Ref PortfolioTable
+          START_DATE: !Ref StartDate
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !If [IsFtxExchangeEnabled, !GetAtt SqsFtxRequestFetchTrade.QueueName, !Ref AWS::NoValue]
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref PortfolioTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/FtxFetchTransaction'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  BinanceFetchDistribution:
+    Condition: IsEnabledFetchBinanceDistribution
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Binance distribution
+      CodeUri: functions/binance-fetch-distribution/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          BINANCE_EXCHANGE_API_KEY: !Ref BinanceExchangeApiKey
+          BINANCE_EXCHANGE_SECRET_KEY: !Ref BinanceExchangeSecretKey
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          START_DATE: !Ref StartDate
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/BinanceFetchDistribution'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  BinanceFetchDeposit:
+    Condition: IsEnabledFetchBinanceDeposit
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Binance deposit
+      CodeUri: functions/binance-fetch-deposit/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          BINANCE_EXCHANGE_API_KEY: !Ref BinanceExchangeApiKey
+          BINANCE_EXCHANGE_SECRET_KEY: !Ref BinanceExchangeSecretKey
+          # BSCSCAN_API_KEY: !Ref BscscanApiKey
+          # ETHERSCAN_API_KEY: !Ref EtherscanApiKey
+          WALLET_BOOK_TABLE_NAME: !Ref WalletBookTable
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          START_DATE: !Ref StartDate
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - DynamoDBReadPolicy:
+            TableName: !Ref WalletBookTable
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/BinanceFetchDeposit'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  BinanceFetchWithdraw:
+    Condition: IsEnabledFetchBinanceWithdraw
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Binance withdraw
+      CodeUri: functions/binance-fetch-withdraw/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          BINANCE_EXCHANGE_API_KEY: !Ref BinanceExchangeApiKey
+          BINANCE_EXCHANGE_SECRET_KEY: !Ref BinanceExchangeSecretKey
+          WALLET_BOOK_TABLE_NAME: !Ref WalletBookTable
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          LATEST_SYNC_TRADE_TIME_TABLE: !Ref LatestSyncTradeTimeTable
+          START_DATE: !Ref StartDate
+          # Just for arrange params on AWS Serverless Repo setting
+          # BSCSCAN_API_KEY: !Ref BscscanApiKey
+          # ETHERSCAN_API_KEY: !Ref EtherscanApiKey
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - DynamoDBReadPolicy:
+            TableName: !Ref WalletBookTable
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/BinanceFetchWithdraw'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  BinanceFetchBalance:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Fetch Binance balance
+      CodeUri: functions/binance-fetch-balance/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          BINANCE_EXCHANGE_API_KEY: !Ref BinanceExchangeApiKey
+          BINANCE_EXCHANGE_SECRET_KEY: !Ref BinanceExchangeSecretKey
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/BinanceFetchBalance'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  CointrackingInsertTrade:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Cointracking Insert Trade
+      CodeUri: functions/cointracking-insert-transaction/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          PORTFOLIO_TABLE_NAME: !Ref PortfolioTable
+          SQS_QUEUE_URL: !Ref SqsCointrackingTrade
+          COINTRACKING_COOKIE: !Ref CointrackingCookie
+          COINTRACKING_ADD_TRANSACTION_URL: !Ref CointrackingInputUrl
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SqsCointrackingTrade.QueueName
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref PortfolioTable
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/CointrackingInsertTrade'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  CointrackingGetTransactions:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Cointracking Get Transaction
+      CodeUri: functions/cointracking-get-transactions/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          COINTRACKING_API_KEY: 0d39d9ebe101bdd667ab598150e21804
+          COINTRACKING_API_SECRET: b4bdbbe1196a95348fd5b528c20ff048e4f2d4f0f776b280
+          COINTRACKING_COOKIE: !Ref CointrackingCookie
+          COINTRACKING_ADD_TRANSACTION_URL: !Ref CointrackingInputUrl
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/CointrackingGetTransactions'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  CointrackingRemoveDuplicateTransactions:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Cointracking Remove Duplicate Transaction
+      CodeUri: functions/cointracking-remove-duplicate-transactions/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          COINTRACKING_COOKIE: !Ref CointrackingCookie
+          COINTRACKING_ADD_TRANSACTION_URL: !Ref CointrackingInputUrl
+          COINTRACKING_API_KEY: 0d39d9ebe101bdd667ab598150e21804
+          COINTRACKING_API_SECRET: b4bdbbe1196a95348fd5b528c20ff048e4f2d4f0f776b280
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/CointrackingRemoveDuplicateTransactions'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  SyncPortpolioFromCicSheet:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Sync portfolio from cic-sheet to dynamodb table
+      CodeUri: functions/sync-portfolio-from-cic-sheet/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          PORTFOLIO_TABLE_NAME: !Ref PortfolioTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PortfolioTable
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/SyncPortpolioFromCicSheet'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  SyncWalletbookFromCicSheet:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Sync wallet book from cic-sheet to dynamodb table
+      CodeUri: functions/sync-walletbook-from-cic-sheet/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Environment:
+        Variables:
+          WALLET_BOOK_TABLE_NAME: !Ref WalletBookTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WalletBookTable
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/SyncWalletbookFromCicSheet'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+  ScanDynamodbTableFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Scan and get data from specific dynamodb table
+      CodeUri: functions/scan-dynamodb-table/
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 900
+      MemorySize: 256
+      Layers:
+        - !Ref libs
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PortfolioTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref LatestSyncTradeTimeTable
+        - AWSLambdaBasicExecutionRole
+      Events:
+        HttpPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CryptoTrackingAwsApiGateway
+            Path: '/ScanDynamodbTableFunction'
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+
+# ============================== SQS ==============================
+
+  SqsCointrackingTrade:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 345600 # Default value: 345,600 seconds = 4 days
+      QueueName: CoinTracking-PendingTradeInput
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 900
+
+  SqsBinanceRequestFetchTrade:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 345600 # Default value: 345,600 seconds = 4 days
+      QueueName: SqsBinanceRequestFetchTrade
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 900
+
+  SqsHuobiRequestFetchTrade:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 345600 # Default value: 345,600 seconds = 4 days
+      QueueName: SqsHuobiRequestFetchTrade
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 900
+
+  SqsFtxRequestFetchTrade:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MessageRetentionPeriod: 345600 # Default value: 345,600 seconds = 4 days
+      QueueName: SqsFtxRequestFetchTrade
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 900
+
+  CointrackingInsertTradeEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt SqsCointrackingTrade.Arn
+      FunctionName: !GetAtt CointrackingInsertTrade.Arn
+
+  BinanceRequestFetchTradeEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt SqsBinanceRequestFetchTrade.Arn
+      FunctionName: !GetAtt BinanceFetchTransaction.Arn
+
+  HuobiRequestFetchTradeEventSourceMapping:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !If [IsHuobiExchangeEnabled, !GetAtt SqsHuobiRequestFetchTrade.Arn, !Ref AWS::NoValue]
+      FunctionName: !GetAtt HuobiFetchTransaction.Arn
+
+  FtxRequestFetchTradeEventSourceMapping:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !If [IsFtxExchangeEnabled, !GetAtt SqsFtxRequestFetchTrade.Arn, !Ref AWS::NoValue]
+      FunctionName: !GetAtt FtxFetchTransaction.Arn
+
+# ============================== DynamoDB Table ==============================
+  PortfolioTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PortfolioTable
+      AttributeDefinitions:
+        - AttributeName: coinKey
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema: #required
+        - AttributeName: coinKey
+          KeyType: HASH
+
+  LatestSyncTradeTimeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: LatestSyncTradeTimeTable
+      AttributeDefinitions:
+        - AttributeName: exchange
+          AttributeType: S
+        - AttributeName: pair
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema: #required
+        - AttributeName: exchange
+          KeyType: HASH
+        - AttributeName: pair
+          KeyType: RANGE
+
+  WalletBookTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: WalletBook
+      AttributeDefinitions:
+        - AttributeName: address
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema: #required
+        - AttributeName: address
+          KeyType: HASH
+
+# ============================== EVENT RULE ==============================
+  EventRuleBinanceFetchTradeRequestUsdt:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (USDT) from Binance
+      Name: BinanceFetchTradeRequestEventRule_USDT
+      ScheduleExpression: !Sub "cron(0 0/${BinanceFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"USDT\", \"exchangeName\": \"Binance\"}"}'
+
+  LambdaInvokePermissionBinanceFetchTradeRequestUsdt:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchTradeRequestUsdt.Arn
+
+  EventRuleBinanceFetchTradeRequestBnb:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (BNB) from Binance
+      Name: BinanceFetchTradeRequestEventRule_BNB
+      ScheduleExpression: !Sub "cron(1 0/${BinanceFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"BNB\", \"exchangeName\": \"Binance\"}"}'
+
+  LambdaInvokePermissionBinanceFetchTradeRequestBnb:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchTradeRequestBnb.Arn
+
+  EventRuleBinanceFetchTradeRequestBusd:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (BUSD) from Binance
+      Name: BinanceFetchTradeRequestEventRule_BUSD
+      ScheduleExpression: !Sub "cron(2 0/${BinanceFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"BUSD\", \"exchangeName\": \"Binance\"}"}'
+
+  LambdaInvokePermissionBinanceFetchTradeRequestBusd:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchTradeRequestBusd.Arn
+
+  EventRuleBinanceFetchTradeRequestBtc:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (BTC) from Binance
+      Name: BinanceFetchTradeRequestEventRule_BTC
+      ScheduleExpression: !Sub "cron(3 0/${BinanceFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"BTC\", \"exchangeName\": \"Binance\"}"}'
+
+  LambdaInvokePermissionBinanceFetchTradeRequestBtc:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchTradeRequestBtc.Arn
+
+  EventRuleBinanceFetchTradeRequestEth:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (ETH) from Binance
+      Name: BinanceFetchTradeRequestEventRule_ETH
+      ScheduleExpression: !Sub "cron(4 0/${BinanceFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"ETH\", \"exchangeName\": \"Binance\"}"}'
+
+  LambdaInvokePermissionBinanceFetchTradeRequestEth:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchTradeRequestEth.Arn
+
+  EventRuleBinanceFetchDeposit:
+    Condition: IsEnabledFetchBinanceDeposit
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule fetch deposit data from Binance
+      Name: BinanceFetchDepositEventRule
+      ScheduleExpression: "cron(1 0/1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt BinanceFetchDeposit.Arn
+          Id: "Default"
+          Input: '{"body": "{}"}'
+
+  LambdaInvokePermissionBinanceFetchDeposit:
+    Condition: IsEnabledFetchBinanceDeposit
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BinanceFetchDeposit
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchDeposit.Arn
+
+  EventRuleBinanceFetchWithdraw:
+    Condition: IsEnabledFetchBinanceWithdraw
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule fetch withdraw data from Binance
+      Name: BinanceFetchWithdrawEventRule
+      ScheduleExpression: "cron(2 0/1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt BinanceFetchWithdraw.Arn
+          Id: "Default"
+          Input: '{"body": "{}"}'
+
+  LambdaInvokePermissionBinanceFetchWithdraw:
+    Condition: IsEnabledFetchBinanceWithdraw
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BinanceFetchWithdraw
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchWithdraw.Arn
+
+  EventRuleBinanceFetchDistribution:
+    Condition: IsEnabledFetchBinanceDistribution
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule fetch distribution data from Binance
+      Name: BinanceFetchDistributionEventRule
+      ScheduleExpression: "cron(3 0/1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt BinanceFetchDistribution.Arn
+          Id: "Default"
+          Input: '{"body": "{}"}'
+
+  LambdaInvokePermissionBinanceFetchDistribution:
+    Condition: IsEnabledFetchBinanceDistribution
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BinanceFetchDistribution
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleBinanceFetchDistribution.Arn
+
+  EventRuleHuobiFetchTradeRequestUsdt:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (USDT) from Huobi
+      Name: HuobiFetchTradeRequestEventRule_USDT
+      ScheduleExpression: !Sub "cron(0 0/${HuobiFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"USDT\", \"exchangeName\": \"Huobi\"}"}'
+
+  LambdaInvokePermissionHuobiFetchTradeRequestUsdt:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleHuobiFetchTradeRequestUsdt.Arn
+
+  LambdaInvokePermissionFtxFetchTradeRequestUsdt:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InitFetchTradeRequest
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleFtxFetchTradeRequestUsdt.Arn
+
+  EventRuleFtxFetchTradeRequestUsdt:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Scheduled rule init request fetch trade (USDT) from FTX
+      Name: FtxFetchTradeRequestEventRule_USDT
+      ScheduleExpression: !Sub "cron(0 0/${FtxFetchTradeFrequency} * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt InitFetchTradeRequest.Arn
+          Id: "Default"
+          Input: '{"body": "{\"quoteAsset\": \"USDT\", \"exchangeName\": \"FTX\"}"}'
+
+  EventRuleCointrackingRemoveDuplicateTransactions:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Pediodic remove duplicate transaction on cointracking.com account
+      Name: CointrackingRemoveDuplicateTransactionsEventRule
+      ScheduleExpression: "cron(0 0/1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CointrackingRemoveDuplicateTransactions.Arn
+          Id: "Default"
+          Input: '{"body": "{}"}'
+
+  LambdaInvokePermissionCointrackingRemoveDuplicateTransactions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CointrackingRemoveDuplicateTransactions
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRuleCointrackingRemoveDuplicateTransactions.Arn
+
+############################################ LOG GROUP ############################################
+  LogsLogGroupBinanceFetchTransaction:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${BinanceFetchTransaction}"
+      RetentionInDays: 7
+  LogsLogGroupHuobiFetchTransaction:
+    Condition: IsHuobiExchangeEnabled
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${HuobiFetchTransaction}"
+      RetentionInDays: 7
+  LogsLogGroupInitFetchTradeRequest:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InitFetchTradeRequest}"
+      RetentionInDays: 7
+  LogsLogGroupFtxFetchTransaction:
+    Condition: IsFtxExchangeEnabled
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FtxFetchTransaction}"
+      RetentionInDays: 7
+  LogsLogGroupBinanceFetchDistribution:
+    Condition: IsEnabledFetchBinanceDistribution
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${BinanceFetchDistribution}"
+      RetentionInDays: 7
+  LogsLogGroupBinanceFetchDeposit:
+    Condition: IsEnabledFetchBinanceDeposit
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${BinanceFetchDeposit}"
+      RetentionInDays: 7
+  LogsLogGroupBinanceFetchWithdraw:
+    Condition: IsEnabledFetchBinanceWithdraw
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${BinanceFetchWithdraw}"
+      RetentionInDays: 7
+  LogsLogGroupBinanceFetchBalance:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${BinanceFetchBalance}"
+      RetentionInDays: 7
+  LogsLogGroupCointrackingInsertTrade:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CointrackingInsertTrade}"
+      RetentionInDays: 7
+  LogsLogGroupCointrackingGetTransactions:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CointrackingGetTransactions}"
+      RetentionInDays: 7
+  LogsLogGroupCointrackingRemoveDuplicateTransactions:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CointrackingRemoveDuplicateTransactions}"
+      RetentionInDays: 7
+  LogsLogGroupSyncPortpolioFromCicSheet:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SyncPortpolioFromCicSheet}"
+      RetentionInDays: 7
+  LogsLogGroupSyncWalletbookFromCicSheet:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SyncWalletbookFromCicSheet}"
+      RetentionInDays: 7
+  LogsLogGroupScanDynamodbTableFunction:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ScanDynamodbTableFunction}"
+      RetentionInDays: 7
+
+############################################ BILLING ALARM ############################################
+  BillingAlertOne:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref BillingAlertTopic
+      AlarmDescription: Billing Alert for $10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      EvaluationPeriods: 1
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Period: 21600
+      TreatMissingData: breaching
+      Statistic: Maximum
+      Threshold: 10
+
+  BillingAlertTwo:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref BillingAlertTopic
+      AlarmDescription: Billing Alert for $20
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      EvaluationPeriods: 1
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Period: 21600
+      TreatMissingData: breaching
+      Statistic: Maximum
+      Threshold: 30
+
+  BillingAlertTopic:
+    Type: AWS::SNS::Topic
+
+  AlarmSubscriberEmail:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref Email
+      Protocol: email
+      TopicArn: !Ref BillingAlertTopic
+
+Outputs:
+  SyncPortpolioFromCicSheetInvokeURL:
+    Value: !Sub https://${CryptoTrackingAwsApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/SyncPortpolioFromCicSheet

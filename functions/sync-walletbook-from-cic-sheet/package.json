@@ -1,0 +1,13 @@
+{
+  "name": "sync-portfolio-from-cic-sheet",
+  "version": "1.0.0",
+  "description": "Sync portfolio from cic-sheet to dynamodb table",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+  }
+}

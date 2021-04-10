@@ -1,0 +1,15 @@
+{
+  "name": "binance-fetch-distribution",
+  "version": "1.0.0",
+  "description": "Fetch withdraw from Binance",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "lodash": "^4.17.20",
+    "moment": "^2.29.1"
+  }
+}
